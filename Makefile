@@ -5,6 +5,7 @@ JFROG_API_KEY ?= THE_KEY
 JFROG_USERNAME ?= USERNAME
 JFROG_URL ?= https://bintray.com/api/v1
 FILES := usr/local/bin/script.sh etc/demo/example.conf
+PACKAGES ?= pkg/$(JFROG_PACKAGE).deb pkg/$(JFROG_PACKAGE).rpm
 
 # :subject/:repo/:package/:version/publish
 JFROG_SUBJECT ?= SUBJECT
@@ -24,15 +25,34 @@ clean:
 
 build: clean $(BUILD_TARGET_SCRIPT) $(BUILD_TARGET_CONF)
 
-pkg: pkg/deb pkg/rpm
+pkg: $(PACKAGES)
 
-pkg/deb: REPO = $(JFROG_REPO_DEB)
-pkg/rpm: REPO = $(JFROG_REPO_RPM)
-
-pkg/%: PKG_PATH = "pkg/$(JFROG_SUBJECT)/$(REPO)/$(JFROG_PACKAGE)/$(VERSION)"
+pkg/$(JFROG_PACKAGE).rpm: TARGET_ARTIFACT = rpm
+pkg/%: TARGET_ARTIFACT = deb
 pkg/%: build
-	mkdir -p $(PKG_PATH)
-	cp -r build/* $(PKG_PATH)
+	mkdir -p pkg
+	fpm -s dir -t $(TARGET_ARTIFACT) \
+		--name demo \
+		--package pkg/$(JFROG_PACKAGE).$(TARGET_ARTIFACT) \
+		--force \
+		--category admin \
+		--epoch $(shell /bin/date +%s) \
+		--iteration $(VERSION) \
+		--deb-compression bzip2 \
+		--url https://example.com \
+		--description "demo package" \
+		--maintainer "demo <demo@example.com>" \
+		--license "Some Licence" \
+		--vendor "example.com" \
+		--architecture amd64 \
+		build/=/
+
+# pkg/$(JFROG_PACKAGE).rpm:
+
+# pkg/%: PKG_PATH = "pkg/$(JFROG_SUBJECT)/$(REPO)/$(JFROG_PACKAGE)/$(VERSION)"
+# pkg/%: build
+# 	mkdir -p $(PKG_PATH)
+# 	cp -r build/* $(PKG_PATH)
 
 $(BUILD_TARGET_SCRIPT):
 	mkdir -p $(@D)
@@ -45,24 +65,37 @@ $(BUILD_TARGET_CONF):
 
 publish: pkg
 	@echo "Creating a new version ($(VERSION))"
-	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" \
+	curl -v --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" \
 		-d '{"name": "$(VERSION)", "description": "Release $(VERSION)"}' \
 		$(JFROG_URL)/packages/$(JFROG_SUBJECT)/$(JFROG_REPO_DEB)/$(JFROG_PACKAGE)/versions
-	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" \
+	@echo ""
+	@echo ""
+	curl -v --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" \
 		-d '{"name": "$(VERSION)", "description": "Release $(VERSION)"}' \
 		$(JFROG_URL)/packages/$(JFROG_SUBJECT)/$(JFROG_REPO_RPM)/$(JFROG_PACKAGE)/versions
+	@echo ""
+	@echo ""
+
 
 	@echo "Uploading files"
-	$(MAKE) $(addprefix upload/$(JFROG_SUBJECT)/$(JFROG_REPO_DEB)/$(JFROG_PACKAGE)/$(VERSION)/,$(FILES))
-	$(MAKE) $(addprefix upload/$(JFROG_SUBJECT)/$(JFROG_REPO_RPM)/$(JFROG_PACKAGE)/$(VERSION)/,$(FILES))
+	$(MAKE) $(addprefix upload/,$(PACKAGES))
 
-	@echo "Publishing packages"
-	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" -X POST \
+	# @echo "Publishing packages"
+	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" -X POST -d '{"publish_wait_for_secs": -1}' \
 		$(JFROG_URL)/content/$(JFROG_SUBJECT)/$(JFROG_REPO_DEB)/$(JFROG_PACKAGE)/$(VERSION)/publish
-	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" -X POST \
+	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" -X POST -d '{"publish_wait_for_secs": -1}' \
 		$(JFROG_URL)/content/$(JFROG_SUBJECT)/$(JFROG_REPO_RPM)/$(JFROG_PACKAGE)/$(VERSION)/publish
 
+upload/pkg/$(JFROG_PACKAGE).deb: HEADERS = -H "X-Bintray-Debian-Distribution: talam" -H "X-Bintray-Debian-Component: main" -H 'X-Bintray-Debian-Architecture: amd64'
+upload/pkg/$(JFROG_PACKAGE).deb: CONTENT_PATH = $(JFROG_SUBJECT)/$(JFROG_REPO_DEB)/$(JFROG_PACKAGE)/$(VERSION)
+upload/pkg/$(JFROG_PACKAGE).deb: FILE_PATH = $(JFROG_PACKAGE)_$(VERSION)_amd64.deb
+
+upload/%: HEADERS =
+upload/%: CONTENT_PATH = $(JFROG_SUBJECT)/$(JFROG_REPO_RPM)/$(JFROG_PACKAGE)/$(VERSION)
+upload/%: FILE_PATH = $(JFROG_PACKAGE)-$(VERSION)-x86_64.rpm
 upload/%:
 	@echo "Uploading $*"
-	curl --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" -X PUT \
-		--data @pkg/$* $(JFROG_URL)/content/$*
+	curl -v --user "$(JFROG_USERNAME):$(JFROG_API_KEY)" -X PUT $(HEADERS) \
+		-T $* "$(JFROG_URL)/content/$(CONTENT_PATH)/$(FILE_PATH)?override=1&publish=1"
+	@echo ""
+	@echo ""
